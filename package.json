@@ -1,0 +1,16 @@
+{
+  "name": "nicevideodown",
+  "version": "2.2.0",
+  "description": "视频下载神器，支持多平台视频解析、格式选择、任务队列与批量下载",
+  "main": "main.js",
+  "author": "Nicevideodown contributors",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "check": "node --check main.js && node --check preload.js && node --check src/renderer.js"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "electron": "42.1.0"
+  }
+}

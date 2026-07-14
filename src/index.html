@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' https: data:; style-src 'self' 'unsafe-inline'; script-src 'self'; object-src 'none'; base-uri 'none'; frame-src 'none'; connect-src 'none'; form-action 'none'">
+  <title>视频下载神器</title>
+  <link rel="icon" type="image/png" href="../icon.png">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <!-- Header -->
+  <header class="header">
+    <div class="header-left">
+      <div class="logo">
+        <img class="app-logo" src="../icon.png" alt="" aria-hidden="true">
+        <div class="logo-copy">
+          <h1>视频下载神器</h1>
+          <p>支持 YouTube、B站、TapTap、抖音与小红书</p>
+        </div>
+      </div>
+    </div>
+    <div class="header-right">
+      <button id="biliLoginBtn" class="btn-icon" title="B站扫码登录" aria-label="管理 B站登录">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/>
+          <rect x="14" y="14" width="7" height="7"/>
+          <rect x="3" y="14" width="7" height="7"/>
+        </svg>
+      </button>
+      <span id="biliLoginStatus" class="bili-login-status"></span>
+      <button id="themeToggle" class="btn-icon" title="切换明暗主题" aria-label="切换明暗主题">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="5"/>
+          <line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/>
+          <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/>
+          <line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/>
+          <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
+        </svg>
+      </button>
+    </div>
+  </header>
+
+  <main class="main">
+    <!-- URL Input -->
+    <section class="card url-section">
+      <div class="url-input-row">
+        <div class="url-input-wrapper">
+          <svg class="input-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
+            <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
+          </svg>
+          <input type="text" id="urlInput" placeholder="粘贴视频链接，或抖音、小红书分享口令…" spellcheck="false">
+          <button id="clearUrlBtn" class="btn-icon" title="清除" style="display:none">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </button>
+        </div>
+        <button id="fetchBtn" class="btn-primary">获取信息</button>
+      </div>
+      <p id="urlError" class="error-msg hidden" role="alert" aria-live="assertive"></p>
+    </section>
+
+    <!-- Loading Spinner -->
+    <div id="loadingSpinner" class="loading hidden" role="status" aria-live="polite">
+      <div class="spinner"></div>
+      <span>正在获取视频信息…</span>
+    </div>
+
+    <!-- Video Info -->
+    <section id="videoInfo" class="video-info hidden">
+      <div class="card info-card">
+        <div class="thumbnail-wrapper">
+          <img id="thumbnail" src="" alt="缩略图">
+          <span id="duration" class="duration-badge"></span>
+        </div>
+        <div class="info-details">
+          <h2 id="videoTitle" class="video-title"></h2>
+          <p id="videoChannel" class="video-channel"></p>
+        </div>
+      </div>
+
+      <!-- Download Settings -->
+      <div class="card settings-card">
+        <h3 class="section-title">下载设置</h3>
+        <div class="settings-grid">
+          <div class="setting-item">
+            <label>画质</label>
+            <div class="cs-select" id="csResolution">
+              <div class="cs-trigger" tabindex="0" role="combobox" aria-haspopup="listbox">
+                <span class="cs-value placeholder" id="csValue">选择画质</span>
+                <svg class="cs-arrow" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <polyline points="6 9 12 15 18 9"/>
+                </svg>
+              </div>
+              <div class="cs-dropdown" id="csDropdown" role="listbox"></div>
+            </div>
+            <select id="resolutionSelect" class="hidden" style="display:none"></select>
+          </div>
+          <div class="setting-item">
+            <label for="formatSelect">格式</label>
+            <select id="formatSelect">
+              <option value="mp4">MP4 格式</option>
+              <option value="webm">WebM 格式（仅 YouTube）</option>
+            </select>
+          </div>
+        </div>
+        <div class="output-dir-row">
+          <label for="outputDir">保存到</label>
+          <div class="dir-input-row">
+            <input type="text" id="outputDir" readonly>
+            <button id="browseDirBtn" class="btn-secondary">浏览</button>
+          </div>
+        </div>
+        <!-- Proxy Settings -->
+        <details class="proxy-settings">
+          <summary class="proxy-summary">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="2" y="2" width="20" height="8" rx="2" ry="2"/>
+              <rect x="2" y="14" width="20" height="8" rx="2" ry="2"/>
+              <line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/>
+            </svg>
+            代理设置
+          </summary>
+          <div class="proxy-body">
+            <div class="proxy-input-row">
+              <input type="text" id="proxyUrl" placeholder="例如：http://127.0.0.1:7890 或 socks5://127.0.0.1:1080">
+              <button id="testProxyBtn" class="btn-secondary btn-sm">测试</button>
+            </div>
+            <p id="proxyStatus" class="proxy-status hidden"></p>
+          </div>
+        </details>
+
+        <div id="toolStatus" class="tool-status" aria-live="polite"></div>
+
+        <button id="downloadBtn" class="btn-primary btn-download" disabled>
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+            <polyline points="7 10 12 15 17 10"/>
+            <line x1="12" y1="15" x2="12" y2="3"/>
+          </svg>
+          开始下载
+        </button>
+      </div>
+    </section>
+
+    <!-- Multi Video Section (for pages with multiple videos like TapTap) -->
+    <section id="multiVideoSection" class="video-info hidden">
+      <div class="card multi-video-header-card">
+        <h3 id="multiVideoCount" class="section-title"></h3>
+      </div>
+      <div id="multiVideoList"></div>
+    </section>
+
+    <!-- Queue / History Tabs -->
+    <section class="card bottom-section">
+      <div class="tab-bar">
+        <button id="queueTab" class="tab active" data-tab="queue">下载队列 <span id="queueCount" class="badge">0</span></button>
+        <button id="batchTab" class="tab" data-tab="batch">批量下载</button>
+        <button id="historyTab" class="tab" data-tab="history">下载历史</button>
+        <div class="tab-bar-spacer"></div>
+        <button id="resumeAllBtn" class="btn-batch">全部开始</button>
+        <button id="pauseAllBtn" class="btn-batch">全部暂停</button>
+        <button id="cancelAllBtn" class="btn-batch">全部取消</button>
+        <button id="clearHistoryBtn" class="btn-batch hidden">清空历史</button>
+        <button id="batchStartAllBtn" class="btn-primary btn-sm hidden">开始全部下载</button>
+      </div>
+
+      <!-- Queue Panel -->
+      <div id="queuePanel" class="tab-panel active">
+        <div id="queueEmpty" class="empty-state">
+          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.4">
+            <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+          </svg>
+          <p>下载队列为空</p>
+          <span>添加视频链接开始下载</span>
+        </div>
+        <div id="queueList" class="queue-list"></div>
+      </div>
+
+      <!-- History Panel -->
+      <div id="historyPanel" class="tab-panel">
+        <div id="historyEmpty" class="empty-state">
+          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.4">
+            <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
+          </svg>
+          <p>暂无下载记录</p>
+        </div>
+        <div id="historyList" class="queue-list"></div>
+      </div>
+
+      <!-- Batch Panel -->
+      <div id="batchPanel" class="tab-panel">
+        <!-- URL Input -->
+        <div class="batch-input-section">
+          <textarea id="batchUrlInput" class="batch-textarea" placeholder="粘贴多个 YouTube 链接，一行一个…" spellcheck="false"></textarea>
+          <div class="batch-input-row">
+            <button id="batchParseBtn" class="btn-primary">批量识别</button>
+            <span id="batchUrlStats" class="batch-stats"></span>
+            <div class="batch-save-inline">
+              <label>保存到</label>
+              <input type="text" id="batchSaveDir" readonly placeholder="请选择保存目录…">
+              <button id="batchSaveBrowseBtn" class="btn-secondary btn-sm">浏览</button>
+            </div>
+          </div>
+        </div>
+        <div id="batchEmpty" class="empty-state">
+          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.4">
+            <rect x="2" y="4" width="20" height="16" rx="2"/>
+            <polygon points="10,8 16,12 10,16" fill="currentColor"/>
+          </svg>
+          <p>粘贴链接后点击“批量识别”</p>
+          <span>支持同时识别多个 YouTube 视频</span>
+        </div>
+
+        <!-- Results (shown after parsing) -->
+        <div id="batchResults" class="batch-results hidden">
+          <div class="batch-summary">
+            <span id="batchCount"></span>
+            <span id="batchTotalSize" class="batch-total-size"></span>
+          </div>
+          <div id="batchCookieWarning" class="batch-cookie-warning hidden">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+              <line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+            </svg>
+            <span>检测到 YouTube 登录验证限制，当前环境可能被风控，可能导致大部分视频无法识别。建议操作：间隔一到两小时后再试；如仍频繁出现，可将从已登录浏览器导出的账号信息保存为“登录信息.txt”并放到软件目录。</span>
+          </div>
+          <div id="batchResultList" class="batch-result-list"></div>
+        </div>
+
+      </div>
+    </section>
+  </main>
+
+  <!-- Bilibili QR Login Modal -->
+  <div id="biliLoginModal" class="modal-overlay hidden">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3>B站扫码登录</h3>
+        <button id="biliLoginClose" class="btn-icon" title="关闭" aria-label="关闭登录窗口">&times;</button>
+      </div>
+      <div class="bili-login-desc">
+        <p><strong>登录后可以：</strong></p>
+        <ul>
+          <li>获取更多 B站 画质档位（1080p 高清、4K 等）</li>
+          <li>下载需要登录或大会员权限的视频（需账号有对应权限）</li>
+        </ul>
+        <p class="bili-login-note">仅影响 B站下载，不会影响 YouTube、TapTap、抖音或小红书。</p>
+      </div>
+      <div class="modal-body" id="biliLoginBody">
+        <div class="qr-wrapper" id="qrWrapper">
+          <img id="qrImage" src="" alt="二维码" class="qr-image">
+          <p id="qrStatus" class="qr-status">正在获取二维码…</p>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <span class="qr-hint">请使用 B站客户端扫码</span>
+      </div>
+    </div>
+  </div>
+
+  <div id="toastRegion" class="toast-region" aria-live="polite" aria-atomic="true"></div>
+  <script src="vendor/qrcode.js"></script>
+  <script src="renderer.js"></script>
+</body>
+</html>
+

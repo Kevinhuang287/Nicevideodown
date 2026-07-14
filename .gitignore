@@ -1,0 +1,35 @@
+# 依赖和构建产物
+node_modules/
+dist/
+out/
+release/
+*.asar
+*.zip
+
+# 外部下载组件（随 GitHub Release 提供，不提交到源码仓库）
+yt-dlp.exe
+ffmpeg.exe
+ffprobe.exe
+aria2c.exe
+
+# 账号、登录态与本机配置
+cookies.txt
+cookies.*.txt
+*.cookies.txt
+.env
+.env.*
+settings.json
+history.json
+
+# 运行时数据
+log/
+logs/
+Downloads/
+*.log
+*.aria2
+
+# 系统和编辑器
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
