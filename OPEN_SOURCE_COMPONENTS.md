@@ -4,9 +4,9 @@ Nicevideodown 的源码使用 MIT License。Windows 便携版同时分发下列�
 
 | 组件 | 版本 | 许可证 | 项目与源码 |
 | --- | --- | --- | --- |
-| Electron | 42.1.0 | MIT | https://github.com/electron/electron |
-| Chromium | Electron 42.1.0 随附版本 | 多种开源许可证 | 便携包内 `LICENSES.chromium.html` |
-| yt-dlp | 2026.06.09 | Unlicense | https://github.com/yt-dlp/yt-dlp |
+| Electron | 42.11.3 | MIT | https://github.com/electron/electron |
+| Chromium | Electron 42.11.3 随附版本 | 多种开源许可证 | 便携包内 `LICENSES.chromium.html` |
+| yt-dlp | 2026.08.19 | Unlicense | https://github.com/yt-dlp/yt-dlp |
 | FFmpeg | 8.1.1 | GPL-3.0-or-later（当前 Windows 构建） | https://ffmpeg.org/ 与 https://www.gyan.dev/ffmpeg/builds/ |
 | aria2 | 1.37.0 | GPL-2.0-or-later | https://github.com/aria2/aria2 |
 | qrcode-generator | 1.4.4 | MIT | https://github.com/kazuhikoarase/qrcode-generator |

@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 1,
+  "asarVersion": "4.3.0",
+  "package": {
+    "name": "shipin-xiazai-shenqi",
+    "version": "2.2.1",
+    "description": "视频下载神器，支持多平台视频解析、格式选择、任务队列与批量下载",
+    "main": "main.js",
+    "author": "",
+    "license": "MIT",
+    "dependencies": {}
+  },
+  "files": [
+    "CODEX-API.md",
+    "codex-download.cmd",
+    "codex-download.ps1",
+    "codex-interface.json",
+    "icon.ico",
+    "icon.png",
+    "main.js",
+    "preload.js",
+    "src/index.html",
+    "src/renderer.js",
+    "src/styles.css",
+    "src/vendor/qrcode.js",
+    "THIRD_PARTY_NOTICES.md"
+  ],
+  "externalFiles": [
+    "CODEX-API.md",
+    "codex-download.cmd",
+    "codex-download.ps1",
+    "codex-interface.json"
+  ]
+}

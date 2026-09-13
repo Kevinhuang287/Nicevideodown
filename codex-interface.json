@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "name": "video-downloader-codex",
+  "version": "2.2.1",
+  "entryPoint": "codex-download.ps1",
+  "shell": "pwsh",
+  "commands": ["download", "info", "self-test"],
+  "supportedPlatforms": ["youtube", "bilibili", "taptap", "douyin", "xiaohongshu"],
+  "resultFormat": "json",
+  "silent": true
+}

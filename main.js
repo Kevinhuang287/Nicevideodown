@@ -7,6 +7,65 @@ const https = require('https');
 const crypto = require('crypto');
 const nodeNet = require('net');
 
+const CODEX_CLI_COMMAND = process.argv.includes('--codex-download')
+  ? 'download'
+  : process.argv.includes('--codex-info')
+    ? 'info'
+    : process.argv.includes('--codex-self-test')
+      ? 'self-test'
+      : '';
+const CODEX_CLI_MODE = Boolean(CODEX_CLI_COMMAND);
+const CODEX_NO_CREDENTIALS = CODEX_CLI_MODE && process.argv.includes('--no-credentials');
+const INTERACTIVE_USER_DATA_DIR = app.getPath('userData');
+const CODEX_APP_DIR = app.isPackaged ? path.dirname(app.getPath('exe')) : __dirname;
+const CODEX_RUNTIME_DIR = CODEX_CLI_MODE
+  ? path.resolve(String(process.env.CODEX_RUNTIME_DIR || path.join(app.getPath('temp'), 'shipin-xiazai-shenqi', 'codex-runtime')))
+  : path.join(CODEX_APP_DIR, 'codex-runtime');
+const CODEX_SESSIONS_DIR = path.join(CODEX_RUNTIME_DIR, 'sessions');
+
+function resolveCodexSessionDir() {
+  const fallback = path.join(CODEX_SESSIONS_DIR, `${process.pid}-${Date.now()}`);
+  const requested = String(process.env.CODEX_RUNTIME_SESSION || '').trim();
+  if (!requested) return fallback;
+  const resolved = path.resolve(requested);
+  const relative = path.relative(CODEX_SESSIONS_DIR, resolved);
+  if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) return fallback;
+  return resolved;
+}
+
+function cleanupStaleCodexSessions(currentSessionDir) {
+  const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+  try {
+    fs.mkdirSync(CODEX_SESSIONS_DIR, { recursive: true });
+    for (const entry of fs.readdirSync(CODEX_SESSIONS_DIR, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const candidate = path.join(CODEX_SESSIONS_DIR, entry.name);
+      if (path.resolve(candidate) === path.resolve(currentSessionDir)) continue;
+      try {
+        if (fs.statSync(candidate).mtimeMs < cutoff) fs.rmSync(candidate, { recursive: true, force: true });
+      } catch (error) { /* another process may still own the session */ }
+    }
+  } catch (error) { /* runtime cleanup is best effort */ }
+}
+
+const CODEX_SESSION_DIR = CODEX_CLI_MODE ? resolveCodexSessionDir() : '';
+
+if (CODEX_CLI_MODE) {
+  const cliUserData = path.join(CODEX_SESSION_DIR, 'user-data');
+  const cliSessionData = path.join(CODEX_SESSION_DIR, 'session-data');
+  const cliCache = path.join(CODEX_SESSION_DIR, 'cache');
+  const cliTemp = path.join(CODEX_SESSION_DIR, 'temp');
+  cleanupStaleCodexSessions(CODEX_SESSION_DIR);
+  for (const directory of [CODEX_RUNTIME_DIR, CODEX_SESSIONS_DIR, CODEX_SESSION_DIR, cliUserData, cliSessionData, cliCache, cliTemp]) {
+    fs.mkdirSync(directory, { recursive: true });
+  }
+  app.setPath('userData', cliUserData);
+  app.setPath('sessionData', cliSessionData);
+  app.commandLine.appendSwitch('disk-cache-dir', cliCache);
+  process.env.TEMP = cliTemp;
+  process.env.TMP = cliTemp;
+}
+
 // Must be set before app.whenReady() — Windows uses this to associate
 // the taskbar icon with the running window. Without it, Windows reuses
 // a cached icon from the previous exe's hashed AppUserModelID.
@@ -239,6 +298,9 @@ const USER_DATA_DIR = app.getPath('userData');
 const BILIBILI_COOKIES_FILE = path.join(USER_DATA_DIR, 'B站登录信息.txt');
 const YOUTUBE_COOKIES_FILE = path.join(USER_DATA_DIR, 'YouTube登录信息.txt');
 const XHS_COOKIES_FILE = path.join(USER_DATA_DIR, '小红书访问凭据.txt');
+const READONLY_BILIBILI_COOKIES_FILE = path.join(INTERACTIVE_USER_DATA_DIR, 'B站登录信息.txt');
+const READONLY_YOUTUBE_COOKIES_FILE = path.join(INTERACTIVE_USER_DATA_DIR, 'YouTube登录信息.txt');
+const READONLY_XHS_COOKIES_FILE = path.join(INTERACTIVE_USER_DATA_DIR, '小红书访问凭据.txt');
 const MANAGED_COOKIES_FILE = path.join(USER_DATA_DIR, '登录信息.txt');
 const LEGACY_MANAGED_COOKIES_FILE = path.join(USER_DATA_DIR, 'cookies.txt');
 const APP_COOKIES_FILE = path.join(APP_DIR, '登录信息.txt');
@@ -294,6 +356,7 @@ function writePlatformCookieFile(filePath, platformLabel, lines) {
 }
 
 function migrateLegacyCookieFiles() {
+  if (CODEX_NO_CREDENTIALS) return;
   const legacyFiles = [
     MANAGED_COOKIES_FILE,
     LEGACY_MANAGED_COOKIES_FILE,
@@ -317,13 +380,21 @@ function migrateLegacyCookieFiles() {
 }
 
 function getPlatformCookieFile(platform) {
+  if (CODEX_NO_CREDENTIALS) return '';
   const target = platform === 'bilibili'
     ? BILIBILI_COOKIES_FILE
     : platform === 'youtube'
       ? YOUTUBE_COOKIES_FILE
       : (platform === 'xiaohongshu' ? XHS_COOKIES_FILE : '');
-  if (!target || !existsSync(target)) return '';
-  return readCookieLines(target).some(line => cookieLineMatchesPlatform(line, platform)) ? target : '';
+  const readOnlyTarget = platform === 'bilibili'
+    ? READONLY_BILIBILI_COOKIES_FILE
+    : platform === 'youtube'
+      ? READONLY_YOUTUBE_COOKIES_FILE
+      : (platform === 'xiaohongshu' ? READONLY_XHS_COOKIES_FILE : '');
+  const candidates = [target, CODEX_CLI_MODE ? readOnlyTarget : '']
+    .filter((file, index, list) => file && list.indexOf(file) === index && existsSync(file));
+  return candidates.find(file => readCookieLines(file)
+    .some(line => cookieLineMatchesPlatform(line, platform))) || '';
 }
 
 function execYtdlp(args, options = {}) {
@@ -360,6 +431,12 @@ function execYtdlp(args, options = {}) {
   });
 }
 
+const MAX_YTDLP_DIAGNOSTIC_CHARS = 128 * 1024;
+function appendBoundedText(current, addition, limit = MAX_YTDLP_DIAGNOSTIC_CHARS) {
+  const combined = String(current || '') + String(addition || '');
+  return combined.length > limit ? combined.slice(-limit) : combined;
+}
+
 // yt-dlp download with progress tracking (for HLS/native downloads like TapTap)
 function execYtdlpWithProgress(args, task) {
   return new Promise((resolve, reject) => {
@@ -369,7 +446,10 @@ function execYtdlpWithProgress(args, task) {
     // per-fragment [download] progress, giving smooth progress updates.
     const isBilibili = args.some(a => typeof a === 'string' && /bilibili\.com|b23\.tv/i.test(a));
     const isYouTube = args.some(a => typeof a === 'string' && /youtube\.com|youtu\.be|music\.youtube\.com|m\.youtube\.com/i.test(a));
-    const ytArgs = ytdlpArgs(args, { forDownload: true, noAria: isBilibili, isYouTube });
+    // YouTube's signed googlevideo URLs can reject aria2 with HTTP 403 even
+    // immediately after extraction. Keep the whole YouTube transfer inside
+    // yt-dlp so it can select/refresh the active player client and headers.
+    const ytArgs = ytdlpArgs(args, { forDownload: true, noAria: isBilibili || isYouTube, isYouTube });
     if (isBilibili) {
       const cfIdx = ytArgs.indexOf('--concurrent-fragments');
       if (cfIdx !== -1) ytArgs[cfIdx + 1] = '32';
@@ -436,13 +516,13 @@ function execYtdlpWithProgress(args, task) {
     proc.stdout.on('data', d => {
       resetIdleTimer();
       const text = d.toString();
-      stdout += text;
+      stdout = appendBoundedText(stdout, text);
       parseProgress(text);
     });
     proc.stderr.on('data', d => {
       resetIdleTimer();
       const text = d.toString();
-      stderr += text;
+      stderr = appendBoundedText(stderr, text);
       parseProgress(text);
     });
 
@@ -451,11 +531,16 @@ function execYtdlpWithProgress(args, task) {
       nativeDownloadProcs.delete(task.id);
       if (timedOut) return;
       if (code === 0) resolve();
-      else reject(new Error((stderr || stdout).trim() || `yt-dlp exited with code ${code}`));
+      else {
+        const detail = (stderr || stdout).trim() || `yt-dlp exited with code ${code}`;
+        debugLog(`[YTDLP-DOWNLOAD] exit=${code} err=${detail.slice(-1000)}`);
+        reject(new Error(detail));
+      }
     });
     proc.on('error', e => {
       if (idleTimer) clearTimeout(idleTimer);
       nativeDownloadProcs.delete(task.id);
+      debugLog(`[YTDLP-DOWNLOAD] spawn error: ${String(e.message || e).slice(0, 300)}`);
       reject(e);
     });
   });
@@ -811,23 +896,32 @@ function sanitizeErrorMsg(msg) {
   return s.trim();
 }
 
+function sanitizeLogMessage(value) {
+  return String(value ?? '')
+    .replace(/(https?:\/\/)([^\s\/:@]+):([^\s@\/]+)@/gi, '$1<credentials>@')
+    .replace(/([?&])([^=\s&]+)=([^&\s]*)/g, '$1$2=<redacted>')
+    .replace(/\b[A-Z]:\\Users\\[^\\\s]+/gi, '%USERPROFILE%')
+    .replace(/\b[A-Z]:\/Users\/[^\/\s]+/gi, '%USERPROFILE%')
+    .slice(0, 4000);
+}
+
 function translateError(msg) {
   if (!msg) return '未知错误';
   const clean = sanitizeErrorMsg(msg);
   const map = {
     // ── 登录验证 / Cookie / Bot 检查 ──
     "Sign in to confirm you're not a bot":
-      '请求被 YouTube 拦截，需要登录验证。可能是短时间请求过于频繁、当前网络环境受限或缺少有效登录信息。请间隔一到两小时后重试；如仍频繁出现，可将从已登录浏览器导出的账号信息保存为“登录信息.txt”并放到软件目录。',
+      '请求被 YouTube 拦截，需要登录验证。可能是短时间请求过于频繁、当前网络环境受限或登录信息已失效。请稍后重试；确需账号权限时，只把导出的凭据保存到“%APPDATA%\\shipin-xiazai-shenqi\\YouTube登录信息.txt”，不要放进软件目录或分享包。',
     'Fresh cookies (not necessarily logged in) are needed':
       '抖音需要新的匿名访问凭据。软件会自动创建隔离的抖音访问会话；如仍失败，请先在浏览器中打开该视频确认可以播放，再返回软件重试。',
     'Failed to decrypt with DPAPI':
-      '无法读取浏览器登录信息，可能是浏览器启用了密码保护或系统解密失败。请手动导出 YouTube 账号信息，保存为“登录信息.txt”并放到软件目录后重试。',
+      '无法读取浏览器登录信息，可能是浏览器启用了密码保护或系统解密失败。请手动导出 YouTube 凭据并保存到“%APPDATA%\\shipin-xiazai-shenqi\\YouTube登录信息.txt”，不要放进软件目录。',
     'Could not copy Chrome cookie database':
-      '无法读取浏览器登录信息，可能是浏览器正在运行、数据被占用或权限不足。请关闭浏览器后重试，或手动导出 YouTube 账号信息并保存为“登录信息.txt”。',
+      '无法读取浏览器登录信息，可能是浏览器正在运行、数据被占用或权限不足。请关闭浏览器后重试；如需手动导入，请保存到“%APPDATA%\\shipin-xiazai-shenqi\\YouTube登录信息.txt”。',
     'Sign in to confirm your age':
-      '该视频需要年龄验证，必须提供已登录且符合年龄要求的 YouTube 账号信息。请从已登录浏览器导出账号信息，保存为“登录信息.txt”并放到软件目录后重试。',
+      '该视频需要年龄验证。请使用有权访问该视频的账号凭据，并只保存到“%APPDATA%\\shipin-xiazai-shenqi\\YouTube登录信息.txt”，不要放进软件目录或分享包。',
     'confirm your age':
-      '该视频需要年龄验证，必须提供已登录且符合年龄要求的 YouTube 账号信息。请从已登录浏览器导出账号信息，保存为“登录信息.txt”并放到软件目录后重试。',
+      '该视频需要年龄验证。请使用有权访问该视频的账号凭据，并只保存到“%APPDATA%\\shipin-xiazai-shenqi\\YouTube登录信息.txt”，不要放进软件目录或分享包。',
 
     // ── 视频不可用 / 已被移除 ──
     'Video unavailable':
@@ -937,7 +1031,7 @@ function translateError(msg) {
 
     // ── 兜底：yt-dlp 建议文本中的 cookies 提示（匹配优先级最末） ──
     '--cookies-from-browser':
-      '请求被平台限制，可能是网络环境、访问频率或登录信息失效。请稍后重试；如视频需要账号权限，请更新软件使用的“登录信息.txt”。',
+      '请求被平台限制，可能是网络环境、访问频率或登录信息失效。请稍后重试；如视频确需账号权限，请更新当前用户应用数据目录中的平台登录信息，切勿把凭据放进分享包。',
   };
   for (const [key, val] of Object.entries(map)) {
     if (clean.includes(key) || msg.includes(key)) return val;
@@ -976,7 +1070,7 @@ try {
 } catch (e) {}
 
 function debugLog(msg) {
-  _debugBuf.push(`[${new Date().toISOString()}] ${msg}`);
+  _debugBuf.push(`[${new Date().toISOString()}] ${sanitizeLogMessage(msg)}`);
   if (_debugBuf.length >= 20) { _flushDebug(); return; }
   if (!_debugTimer) _debugTimer = setTimeout(_flushDebug, 500);
 }
@@ -1036,18 +1130,35 @@ const DEFAULT_SETTINGS = {
 // ========== Helpers ==========
 
 function loadJSON(file, defaultVal) {
-  try {
-    if (fs.existsSync(file)) return JSON.parse(fs.readFileSync(file, 'utf8'));
-  } catch (e) { /* ignore */ }
+  for (const candidate of [file, file + '.bak']) {
+    try {
+      if (fs.existsSync(candidate)) return JSON.parse(fs.readFileSync(candidate, 'utf8'));
+    } catch (e) { /* try the recovery copy */ }
+  }
   return defaultVal;
 }
 
 function saveJSON(file, data) {
+  const temporaryFile = `${file}.${process.pid}.tmp`;
   try {
     mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file, JSON.stringify(data, null, 2), 'utf8');
+    const serialized = JSON.stringify(data, null, 2);
+    fs.writeFileSync(temporaryFile, serialized, 'utf8');
+    if (existsSync(file)) {
+      try {
+        JSON.parse(fs.readFileSync(file, 'utf8'));
+        fs.copyFileSync(file, file + '.bak');
+      } catch (error) { /* do not replace a valid backup with corrupt data */ }
+    }
+    try {
+      fs.renameSync(temporaryFile, file);
+    } catch (error) {
+      fs.copyFileSync(temporaryFile, file);
+      fs.rmSync(temporaryFile, { force: true });
+    }
     return true;
   } catch (e) {
+    try { fs.rmSync(temporaryFile, { force: true }); } catch (cleanupError) {}
     debugLog(`[STORAGE] Save failed for ${path.basename(file)}: ${e.message}`);
     return false;
   }
@@ -1091,7 +1202,10 @@ function saveSettings(s, options = {}) {
 }
 
 function getHistory() {
-  if (!_historyCache) _historyCache = loadJSON(HISTORY_FILE, []);
+  if (!_historyCache) {
+    const loaded = loadJSON(HISTORY_FILE, []);
+    _historyCache = Array.isArray(loaded) ? loaded.slice(0, 200) : [];
+  }
   return _historyCache;
 }
 
@@ -1107,6 +1221,7 @@ function sendToWindow(channel, ...args) {
 }
 
 function showNotification(title, body) {
+  if (CODEX_CLI_MODE) return;
   if (Notification.isSupported()) {
     new Notification({ title, body }).show();
   }
@@ -3518,20 +3633,24 @@ async function verifyMediaFile(filePath) {
 
 async function detectMediaResolution(filePath) {
   if (!filePath || !existsSync(filePath)) return '';
-  if (ffprobePath) {
-    const result = await execFileCapture(ffprobePath, [
-      '-v', 'error', '-select_streams', 'v:0',
-      '-show_entries', 'stream=width,height', '-of', 'csv=s=x:p=0', filePath,
-    ]);
-    const match = result.stdout.trim().match(/^(\d{2,5})x(\d{2,5})$/);
-    if (match) return `${match[1]}x${match[2]}`;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (ffprobePath) {
+      const result = await execFileCapture(ffprobePath, [
+        '-v', 'error', '-select_streams', 'v:0',
+        '-show_entries', 'stream=width,height', '-of', 'csv=s=x:p=0', filePath,
+      ]);
+      const match = result.stdout.trim().match(/^(\d{2,5})x(\d{2,5})$/);
+      if (match) return `${match[1]}x${match[2]}`;
+    }
+    if (ffmpegPath) {
+      const result = await execFileCapture(ffmpegPath, ['-i', filePath]);
+      const output = result.stderr || result.stdout;
+      const match = output.match(/(?:,|\s)(\d{3,5})x(\d{3,5})(?:[\s,])/);
+      if (match) return `${match[1]}x${match[2]}`;
+    }
+    if (attempt < 2) await new Promise(resolve => setTimeout(resolve, 250));
   }
-  if (ffmpegPath) {
-    const result = await execFileCapture(ffmpegPath, ['-i', filePath]);
-    const output = result.stderr || result.stdout;
-    const match = output.match(/(?:,|\s)(\d{3,5})x(\d{3,5})(?:[\s,])/);
-    if (match) return `${match[1]}x${match[2]}`;
-  }
+  debugLog('[VERIFY] Unable to detect final video resolution after 3 attempts');
   return '';
 }
 function cleanupTempFiles(videoFile, audioFile, finalFile) {
@@ -3962,7 +4081,10 @@ async function executeDownload(task) {
         ? '缺少音频转换组件，无法生成真正的 MP3 文件。请重新安装完整的软件后重试。'
         : '缺少音视频合并组件，无法下载当前画质。请重新安装完整的软件后重试。');
     }
-    if (audioOnly) task.options.isNativeDownload = true;
+    if (audioOnly || isYouTube) task.options.isNativeDownload = true;
+    if (isYouTube) {
+      debugLog('[YOUTUBE] Using native yt-dlp downloader to avoid signed URL HTTP 403 failures');
+    }
 
     task.status = 'downloading';
     const isResume = task.progress?.percent > 0;
@@ -4656,7 +4778,7 @@ function setupIPC() {
     const results = [];
     const concurrency = 3;
     let cookieBlocked = false;
-    const COOKIE_MSG = '请求被 YouTube 拦截，需要登录验证。可能是短时间请求过于频繁、当前网络环境受限或缺少有效登录信息。请间隔一到两小时后重试；如仍频繁出现，可将从已登录浏览器导出的账号信息保存为“登录信息.txt”并放到软件目录。';
+    const COOKIE_MSG = '请求被 YouTube 拦截，需要登录验证。可能是短时间请求过于频繁、当前网络环境受限或登录信息已失效。请稍后重试；确需账号权限时，只把导出的凭据保存到“%APPDATA%\\shipin-xiazai-shenqi\\YouTube登录信息.txt”，不要放进软件目录或分享包。';
 
     for (let i = 0; i < urls.length; i += concurrency) {
       const batch = urls.slice(i, i + concurrency);
@@ -5058,8 +5180,8 @@ function createChineseMenu() {
           dialog.showMessageBox(mainWindow, {
             type: 'info',
             title: '关于视频下载神器',
-            message: '视频下载神器　版本 2.1',
-            detail: `支持 YouTube、B站、TapTap、抖音与小红书视频、图文下载\n\n组件状态：\n${tools.join('\n')}\n\n下载方式：${aria2cPath ? '多线程高速下载' : '内置分片下载'}\n最大并发任务：${getMaxConcurrentDownloads()}`,
+            message: `视频下载神器　版本 ${app.getVersion()}`,
+            detail: `支持 YouTube、B站、TapTap、抖音与小红书视频、图文下载\n\n组件状态：\n${tools.join('\n')}\n\n下载核心：yt-dlp + FFmpeg${aria2cPath ? '，兼容平台启用多线程加速' : ''}\n最大并发任务：${getMaxConcurrentDownloads()}`,
           });
         }},
       ],
@@ -5067,6 +5189,289 @@ function createChineseMenu() {
   ];
   const menu = Menu.buildFromTemplate(template);
   Menu.setApplicationMenu(menu);
+}
+
+function getCodexCliArg(flag, fallback = '') {
+  for (let i = process.argv.length - 1; i >= 0; i--) {
+    const value = process.argv[i];
+    if (value === flag && i + 1 < process.argv.length) return process.argv[i + 1];
+    if (value.startsWith(flag + '=')) return value.slice(flag.length + 1);
+  }
+  return fallback;
+}
+
+function codexDebugTrace(stage) {
+  if (!CODEX_CLI_MODE || !process.argv.includes('--codex-debug')) return;
+  try {
+    const line = new Date().toISOString() + ' pid=' + process.pid + ' ' + sanitizeLogMessage(stage) + '\n';
+    fs.appendFileSync(path.join(CODEX_RUNTIME_DIR, 'codex-debug.log'), line, 'utf8');
+  } catch (error) {}
+}
+
+function getCodexCliUrl() {
+  const encoded = getCodexCliArg('--codex-url-base64', '');
+  if (encoded) {
+    try { return Buffer.from(encoded, 'base64').toString('utf8'); }
+    catch (error) { throw new Error('链接编码无效'); }
+  }
+  const flag = CODEX_CLI_COMMAND === 'download' ? '--codex-download' : '--codex-info';
+  return getCodexCliArg(flag, '');
+}
+
+function toCodexPublicInfo(info) {
+  return {
+    title: info.title || '',
+    platform: info.platform || (
+      isYouTubeUrl(info.webpageUrl) ? 'youtube'
+        : isBilibiliUrl(info.webpageUrl) ? 'bilibili'
+          : isTapTapUrl(info.webpageUrl) ? 'taptap' : 'unknown'
+    ),
+    webpageUrl: info.webpageUrl || '',
+    duration: Number(info.duration) || 0,
+    channel: info.channel || '',
+    imageCount: Number(info.imageCount) || 0,
+    playlistIndex: Number(info.playlistIndex) || 1,
+    resolutionOptions: (info.resolutionOptions || []).map(option => ({
+      id: option.id,
+      label: option.label || '',
+      height: Number(option.height) || 0,
+      ext: option.ext || '',
+      formatNote: option.formatNote || '',
+      filesize: Number(option.filesize) || 0,
+      disabled: option._virtual === true,
+      disabledReason: option._disableReason || '',
+    })),
+  };
+}
+
+function selectCodexFormat(info, media, quality) {
+  const options = Array.isArray(info.resolutionOptions) ? info.resolutionOptions : [];
+  const imageNote = ['douyin-note', 'xiaohongshu-note'].includes(info.platform);
+  const effectiveMedia = media === 'auto' ? (imageNote ? 'images' : 'video') : media;
+
+  if (effectiveMedia === 'images') {
+    if (!imageNote) throw new Error('当前链接不是图文作品，不能选择原图下载');
+    const selected = options.find(option => option.id === 'best');
+    if (!selected) throw new Error('当前图文作品没有可下载的原图');
+    return { media: effectiveMedia, selected };
+  }
+
+  if (effectiveMedia === 'audio') {
+    const selected = options.find(option => option.id === 'audio');
+    if (!selected) throw new Error('当前作品没有可单独下载的音频');
+    return { media: effectiveMedia, selected };
+  }
+
+  if (imageNote) {
+    throw new Error('当前链接是图文作品，请使用 media=images，或使用 media=audio 下载背景音乐');
+  }
+
+  const candidates = options
+    .filter(option => option.id !== 'best' && option.id !== 'audio' && option._virtual !== true)
+    .sort((a, b) => (Number(b.height) || 0) - (Number(a.height) || 0));
+  if (candidates.length === 0) throw new Error('当前作品没有可下载的视频画质');
+
+  if (!quality || quality === 'best') return { media: effectiveMedia, selected: candidates[0] };
+  const targetHeight = Number(String(quality).replace(/p$/i, ''));
+  if (!Number.isFinite(targetHeight) || targetHeight < 144 || targetHeight > 4320) {
+    throw new Error('画质参数无效，请使用 best 或 144 到 4320 的数字');
+  }
+  const selected = candidates.find(option => Number(option.height) <= targetHeight)
+    || candidates[candidates.length - 1];
+  return { media: effectiveMedia, selected };
+}
+
+function writeCodexCliResult(result) {
+  const resultFile = path.resolve(getCodexCliArg(
+    '--result-file',
+    path.join(CODEX_RUNTIME_DIR, 'last-result.json'),
+  ));
+  mkdirSync(path.dirname(resultFile), { recursive: true });
+  const temporaryFile = resultFile + '.tmp';
+  fs.writeFileSync(temporaryFile, JSON.stringify(result, null, 2), 'utf8');
+  try { fs.rmSync(resultFile, { force: true }); } catch (error) {}
+  fs.renameSync(temporaryFile, resultFile);
+  process.stdout.write(JSON.stringify(result) + '\n');
+}
+
+function runCodexToolVersion(executable, args) {
+  if (!executable || !existsSync(executable)) return '';
+  try {
+    const output = execFileSync(executable, args, {
+      encoding: 'utf8',
+      windowsHide: true,
+      timeout: 15000,
+      env: process.env,
+    });
+    return String(output || '').split(/\r?\n/).find(Boolean) || '';
+  } catch (error) {
+    return '';
+  }
+}
+
+async function runCodexSelfTest() {
+  const ytdlpVersion = runCodexToolVersion(YTDLP_PATH, ['--version']);
+  const ffmpegVersion = runCodexToolVersion(ffmpegPath, ['-version']);
+  const ffprobeVersion = runCodexToolVersion(ffprobePath, ['-version']);
+  const aria2Version = runCodexToolVersion(aria2cPath, ['--version']);
+  const checks = {
+    app: { ok: true, version: app.getVersion() },
+    ytdlp: { ok: Boolean(ytdlpVersion), version: ytdlpVersion },
+    ffmpeg: { ok: Boolean(ffmpegVersion), version: ffmpegVersion },
+    ffprobe: { ok: Boolean(ffprobeVersion), version: ffprobeVersion },
+    aria2: { ok: Boolean(aria2Version), version: aria2Version },
+    runtimeDir: { ok: existsSync(CODEX_RUNTIME_DIR), path: CODEX_RUNTIME_DIR },
+    credentialAccess: { enabled: !CODEX_NO_CREDENTIALS },
+  };
+  if (!checks.ytdlp.ok || !checks.ffmpeg.ok || !checks.ffprobe.ok || !checks.aria2.ok) {
+    throw new Error('下载组件自检失败，请确认软件目录中的 yt-dlp、FFmpeg、FFprobe 和 aria2 文件完整');
+  }
+  return { checks };
+}
+
+async function prepareCodexNetwork() {
+  codexDebugTrace('network:begin');
+  await detectSystemProxyAsync().catch(() => {});
+  codexDebugTrace('network:proxy-detected');
+  setGlobalProxy(getSettings().proxyUrl || _systemProxy || '');
+  codexDebugTrace('network:end');
+}
+
+async function runCodexInfo() {
+  codexDebugTrace('info:begin');
+  await prepareCodexNetwork();
+  codexDebugTrace('info:normalize');
+  const url = normalizeVideoUrl(getCodexCliUrl());
+  codexDebugTrace('info:fetch-begin');
+  const infos = await fetchAllVideosInfo(url);
+  codexDebugTrace('info:fetch-end');
+  return {
+    url,
+    count: infos.length,
+    items: infos.map(toCodexPublicInfo),
+  };
+}
+
+async function runCodexDownload() {
+  await prepareCodexNetwork();
+  const startedAt = Date.now();
+  const url = normalizeVideoUrl(getCodexCliUrl());
+  const infos = await fetchAllVideosInfo(url);
+  const index = Math.max(1, Math.floor(Number(getCodexCliArg('--index', '1')) || 1));
+  const info = infos[index - 1];
+  if (!info) throw new Error('当前页面只有 ' + infos.length + ' 个可下载项目，不能选择第 ' + index + ' 个');
+
+  const mediaArg = String(getCodexCliArg('--media', 'auto')).toLowerCase();
+  if (!['auto', 'video', 'audio', 'images'].includes(mediaArg)) {
+    throw new Error('媒体类型无效，请使用 auto、video、audio 或 images');
+  }
+  const quality = String(getCodexCliArg('--quality', 'best')).toLowerCase();
+  const { media, selected } = selectCodexFormat(info, mediaArg, quality);
+  let ext = media === 'audio' ? 'mp3' : media === 'images' ? 'images'
+    : String(getCodexCliArg('--format', 'mp4')).toLowerCase();
+  if (!['mp4', 'webm', 'mp3', 'images'].includes(ext)) {
+    throw new Error('输出格式无效，请使用 mp4、webm、mp3 或 images');
+  }
+  if (!isYouTubeUrl(url) && ext === 'webm') ext = 'mp4';
+
+  const outputDir = path.resolve(getCodexCliArg(
+    '--output-dir',
+    path.join(app.getPath('downloads'), '视频下载神器'),
+  ));
+  mkdirSync(outputDir, { recursive: true });
+  const isImageCollection = media === 'images';
+  const request = validateDownloadRequest({
+    url,
+    options: {
+      formatId: selected.id,
+      formatNote: selected.label || selected.formatNote || selected.id,
+      resolutionLabel: selected.formatNote || (media === 'audio' ? '音频' : ''),
+      ext,
+      audioOnly: media === 'audio',
+      hasAudio: selected.hasAudio === true,
+      filesize: Number(selected.filesize) || 0,
+      outputDir,
+      title: info.title || '未知视频',
+      isImageCollection,
+      imageCount: isImageCollection ? Math.max(0, Number(info.imageCount) || 0) : 0,
+      isNativeDownload: info.needsNativeDownload === true,
+      playlistIndex: Number(info.playlistIndex) || index,
+    },
+  });
+
+  await startAria2Rpc().catch(() => false);
+  const taskId = addTaskToQueue(request.url, request.options);
+  const task = downloadQueue.find(item => item.id === taskId);
+  if (!task) throw new Error('下载任务创建失败');
+
+  const timeoutSeconds = Math.max(30, Math.min(
+    86400,
+    Math.floor(Number(getCodexCliArg('--timeout-seconds', '7200')) || 7200),
+  ));
+  const deadline = Date.now() + timeoutSeconds * 1000;
+  while (!['completed', 'error', 'cancelled'].includes(task.status)) {
+    if (Date.now() >= deadline) {
+      await Promise.resolve(cancelTask(task.id)).catch(() => {});
+      throw new Error('静默下载超过 ' + timeoutSeconds + ' 秒，任务已停止');
+    }
+    await new Promise(resolve => setTimeout(resolve, 250));
+  }
+  if (task.status !== 'completed') throw new Error(task.error || '静默下载失败');
+  if (!task.outputFile || !existsSync(task.outputFile)) throw new Error('下载任务已结束，但没有找到输出文件');
+
+  let outputBytes = 0;
+  let outputItems = 1;
+  const outputStat = statSync(task.outputFile);
+  if (outputStat.isDirectory()) {
+    const entries = readdirSync(task.outputFile)
+      .map(name => path.join(task.outputFile, name))
+      .filter(file => {
+        try { return statSync(file).isFile(); } catch (error) { return false; }
+      });
+    outputItems = entries.length;
+    outputBytes = entries.reduce((sum, file) => sum + statSync(file).size, 0);
+  } else {
+    outputBytes = outputStat.size;
+  }
+  if (outputBytes <= 0 || outputItems <= 0) throw new Error('输出文件为空，下载结果无效');
+
+  return {
+    taskId,
+    title: info.title || '',
+    platform: toCodexPublicInfo(info).platform,
+    media,
+    qualityRequested: quality,
+    qualitySelected: selected.formatNote || selected.label || selected.id,
+    format: ext,
+    outputPath: task.outputFile,
+    outputBytes,
+    outputItems,
+    actualResolution: task.options.actualResolution || '',
+    elapsedMs: Date.now() - startedAt,
+  };
+}
+
+async function runCodexCli() {
+  const base = {
+    command: CODEX_CLI_COMMAND,
+    appVersion: app.getVersion(),
+    timestamp: new Date().toISOString(),
+  };
+  try {
+    const data = CODEX_CLI_COMMAND === 'self-test'
+      ? await runCodexSelfTest()
+      : CODEX_CLI_COMMAND === 'info'
+        ? await runCodexInfo()
+        : await runCodexDownload();
+    writeCodexCliResult({ ok: true, ...base, ...data });
+    return 0;
+  } catch (error) {
+    codexDebugTrace('cli:catch ' + String(error?.message || error));
+    const message = translateError(error?.message || String(error)) || '静默任务失败';
+    debugLog('[CODEX] ' + String(error?.stack || error).substring(0, 1000));
+    writeCodexCliResult({ ok: false, ...base, error: message });
+    return 1;
+  }
 }
 
 function createWindow() {
@@ -5146,6 +5551,14 @@ app.whenReady().then(async () => {
   } catch (error) {
     debugLog(`[COOKIES] Credential migration failed: ${String(error?.message || error)}`);
   }
+  if (CODEX_CLI_MODE) {
+    const exitCode = await runCodexCli();
+    await stopAllManagedProcesses().catch(() => {});
+    _flushDebug();
+    _shutdownReady = true;
+    app.exit(exitCode);
+    return;
+  }
   detectSystemProxyAsync().catch(() => {});
   // Register IPC handlers and show window ASAP
   setupIPC();
@@ -5184,13 +5597,10 @@ app.on('before-quit', event => {
 });
 
 app.on('window-all-closed', () => {
+  codexDebugTrace('event:window-all-closed');
+  if (CODEX_CLI_MODE) return;
   if (process.platform !== 'darwin') app.quit();
 });
-
-
-
-
-
 
 
 

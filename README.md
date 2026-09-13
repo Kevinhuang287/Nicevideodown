@@ -20,7 +20,7 @@ Windows 用户请从 GitHub Releases 下载便携版 ZIP，完整解压后双击
 
 ## 从源码运行
 
-需要 Node.js 20 或更高版本。
+需要 Node.js 22.12 或更高版本。
 
 ```powershell
 npm install
@@ -30,8 +30,12 @@ npm start
 若需要完整下载能力，请自行从官方项目获取并放到项目根目录：
 
 - [yt-dlp](https://github.com/yt-dlp/yt-dlp)
-- [FFmpeg](https://ffmpeg.org/)
+- [FFmpeg 与 FFprobe](https://ffmpeg.org/)
 - [aria2](https://github.com/aria2/aria2)
+
+## Codex 静默调用与构建
+
+源码已包含正式静默接口；构建命令、发布身份与隔离验收见 [Codex 发布说明](docs/CODEX-RELEASE.md)。使用 `npm run test:codex` 检查接口合同，使用 `npm run build:codex -- --output <空目录>` 生成可复核的 app.asar 和外置入口。
 
 ## 隐私说明
 

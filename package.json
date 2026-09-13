@@ -1,16 +1,20 @@
 {
   "name": "nicevideodown",
-  "version": "2.2.0",
+  "version": "2.2.1",
   "description": "视频下载神器，支持多平台视频解析、格式选择、任务队列与批量下载",
   "main": "main.js",
   "author": "Nicevideodown contributors",
   "license": "MIT",
   "scripts": {
     "start": "electron .",
-    "check": "node --check main.js && node --check preload.js && node --check src/renderer.js"
+    "check": "node --check main.js && node --check preload.js && node --check src/renderer.js",
+    "test": "node tests/codex-contract.test.cjs && node tests/hardening.test.cjs",
+    "build:codex": "node scripts/build-codex-release.cjs",
+    "test:codex": "node tests/codex-contract.test.cjs"
   },
   "dependencies": {},
   "devDependencies": {
-    "electron": "42.1.0"
+    "electron": "42.11.3",
+    "@electron/asar": "4.3.0"
   }
 }
